@@ -67,17 +67,27 @@ from waitress import serve
 from pymongo import MongoClient
 
 # ============ CONFIG — fill in your own values ============
-BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN_HERE"          # from @BotFather
-ADMIN_IDS = [0000000000]                          # owner user ID(s) — always admin, can't be removed
+BOT_TOKEN = "8858477524:AAEzBMLRIBOD-Olw26s276TgWVMldscXhbE"          # from @BotFather
+ADMIN_IDS = [8590705407]                          # owner user ID(s) — always admin, can't be removed
 
-MONGO_URI = "PASTE_YOUR_MONGODB_URI_HERE"         # e.g. mongodb+srv://user:pass@cluster.mongodb.net
-MONGO_DB_NAME = "force_sub_bot"
+MONGO_URI = "mongodb+srv://Alizenx:alizenx@cluster0.brrejva.mongodb.net/?appName=Cluster0"         # e.g. mongodb+srv://user:pass@cluster.mongodb.net
+MONGO_DB_NAME = "Alizenx"
 
 WELCOME_PHOTO_URL = "https://example.com/welcome.jpg"
-WELCOME_TEXT = "👋 Welcome!\n\nOpen a post link to access content."
+WELCOME_TEXT = "👋 Welcome!\n\n🎉 Welcome to Link Provider!
+
+Hello {mention} 👋
+Your trusted place for quick and easy link access.
+
+🔗 Get your required links
+⚡ Fast & simple service
+🛡️ Safe and reliable
+📌 Follow the instructions below to continue.
+
+Thank you for using Link Provider! ❤️."
 
 DEFAULT_LINK_EXPIRY_SECONDS = 5 * 60     # default join-request link lifetime, overridable via /reqtime
-EXTRA_BUTTON_LABEL = "🌐 @Eric_Realm"
+EXTRA_BUTTON_LABEL = "🌐 Eric Realm"
 EXTRA_BUTTON_URL = "https://t.me/Eric_Realm"
 # ==============================================================
 
