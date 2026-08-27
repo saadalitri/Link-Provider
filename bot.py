@@ -74,7 +74,7 @@ MONGO_URI = "mongodb+srv://Alizenx:alizenx@cluster0.brrejva.mongodb.net/?appName
 MONGO_DB_NAME = "Alizenx"
 
 WELCOME_PHOTO_URL = "https://example.com/welcome.jpg"
-WELCOME_TEXT = "👋 Welcome!\n\n🎉 Welcome to Link Provider!
+WELCOME_TEXT = """👋 Welcome!\n\n🎉 Welcome to Link Provider!
 
 Hello {mention} 👋
 Your trusted place for quick and easy link access.
@@ -84,7 +84,7 @@ Your trusted place for quick and easy link access.
 🛡️ Safe and reliable
 📌 Follow the instructions below to continue.
 
-Thank you for using Link Provider! ❤️."
+Thank you for using Link Provider! ❤️."""
 
 DEFAULT_LINK_EXPIRY_SECONDS = 5 * 60     # default join-request link lifetime, overridable via /reqtime
 EXTRA_BUTTON_LABEL = "🌐 Eric Realm"
