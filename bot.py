@@ -74,17 +74,7 @@ MONGO_URI = "mongodb+srv://Alizenx:alizenx@cluster0.brrejva.mongodb.net/?appName
 MONGO_DB_NAME = "Alizenx"
 
 WELCOME_PHOTO_URL = "https://example.com/welcome.jpg"
-WELCOME_TEXT = """👋 Welcome!\n\n🎉 Welcome to Link Provider!
-
-Hello {mention} 👋
-Your trusted place for quick and easy link access.
-
-🔗 Get your required links
-⚡ Fast & simple service
-🛡️ Safe and reliable
-📌 Follow the instructions below to continue.
-
-Thank you for using Link Provider! ❤️."""
+WELCOME_TEXT = "👋 Welcome!\n\nOpen a post link to access content."
 
 DEFAULT_LINK_EXPIRY_SECONDS = 5 * 60     # default join-request link lifetime, overridable via /reqtime
 EXTRA_BUTTON_LABEL = "🌐 Eric Realm"
@@ -111,6 +101,14 @@ class AdminAlertExceptionHandler(telebot.ExceptionHandler):
 
 
 bot = telebot.TeleBot(BOT_TOKEN, exception_handler=AdminAlertExceptionHandler())
+
+
+def alert_admins(text: str):
+    for admin_id in ADMIN_IDS:
+        try:
+            bot.send_message(admin_id, text, parse_mode="HTML")
+        except Exception:
+            pass
 
 mongo_client = MongoClient(MONGO_URI) if MONGO_URI != "PASTE_YOUR_MONGODB_URI_HERE" else None
 db = mongo_client[MONGO_DB_NAME] if mongo_client else None
@@ -955,12 +953,27 @@ def handle_autoforward_setup(message: types.Message):
         bot.reply_to(message, "❌ All IDs must be numeric, e.g. -1001234567890.")
         return
 
+    warnings = []
+    try:
+        me_id = bot.get_me().id
+        db_status = bot.get_chat_member(db_channel_id, me_id).status
+        if db_status != "administrator":
+            warnings.append(f"⚠️ Bot isn't admin in the DB channel (<code>{db_channel_id}</code>) — it won't receive new posts from it at all.")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Bot can't access the DB channel <code>{db_channel_id}</code> at all: {e}\n\nAdd the bot there as admin first, then retry.", parse_mode="HTML")
+        return
+
     targets = []
     for tid in target_ids:
         try:
-            targets.append({"id": tid, "title": bot.get_chat(tid).title or str(tid)})
-        except Exception:
+            chat = bot.get_chat(tid)
+            targets.append({"id": tid, "title": chat.title or str(tid)})
+            status = bot.get_chat_member(tid, me_id).status
+            if status != "administrator":
+                warnings.append(f"⚠️ Bot isn't admin in target <code>{tid}</code> — forwarding there will fail.")
+        except Exception as e:
             targets.append({"id": tid, "title": str(tid)})
+            warnings.append(f"⚠️ Bot can't access target <code>{tid}</code>: {e}")
 
     try:
         db_title = bot.get_chat(db_channel_id).title or str(db_channel_id)
@@ -979,9 +992,10 @@ def handle_autoforward_setup(message: types.Message):
     )
 
     target_list = "\n".join(f"• {html_lib.escape(t['title'])} (<code>{t['id']}</code>)" for t in merged.values())
+    warning_block = ("\n\n" + "\n".join(warnings)) if warnings else ""
     bot.reply_to(
         message,
-        f"✅ Auto-forwarding ON\n\n📥 Source: {html_lib.escape(db_title)} (<code>{db_channel_id}</code>)\n📤 Targets:\n{target_list}",
+        f"✅ Auto-forwarding ON\n\n📥 Source: {html_lib.escape(db_title)} (<code>{db_channel_id}</code>)\n📤 Targets:\n{target_list}{warning_block}",
         parse_mode="HTML",
     )
 
@@ -1056,6 +1070,7 @@ def handle_autoforward_post(message: types.Message):
             bot.forward_message(target["id"], message.chat.id, message.message_id)
         except Exception as e:
             print(f"Auto-forward failed ({message.chat.id} -> {target['id']}): {e}")
+            alert_admins(f"⚠️ Auto-forward failed\n📥 Source: <code>{message.chat.id}</code>\n📤 Target: <code>{target['id']}</code>\nError: {html_lib.escape(str(e))}")
 
 
 # =========================================================================
