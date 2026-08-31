@@ -9,12 +9,12 @@ Commands:
   /add   (/addchannel)     - register a channel (category: drama, legacy default)
                               (reply to a forwarded post from that channel);
                               also generates a link for that specific post
-  /addA                     - same, but registers the channel under Anime
-  /addD                     - same, but registers the channel under Drama
+  /adda                     - same, but registers the channel under Anime
+  /addd                     - same, but registers the channel under Drama
   /del   (/removechannel)  - pick a channel to remove (any category)
   /channels                - pick any channel -> see its join link & post links
-  /channelA                - same, filtered to Anime channels only
-  /channelD                - same, filtered to Drama channels only
+  /channela                - same, filtered to Anime channels only
+  /channeld                - same, filtered to Drama channels only
   /links (/channelslist)   - flat list of every channel with its join link
   /ch_links                - flat list of every channel's invite/join link only
   /reqlink                 - pick a channel -> get a fresh instant join-request link
@@ -455,7 +455,7 @@ def register_channel(message: types.Message, category: str):
         bot.reply_to(
             message,
             "❌ First forward any post from the channel into this chat, "
-            "then reply to that forwarded message with /add (or /addA, /addD).",
+            "then reply to that forwarded message with /add (or /adda, /addd).",
         )
         return
 
@@ -511,16 +511,16 @@ def register_channel(message: types.Message, category: str):
 @bot.message_handler(commands=["addchannel", "add"])
 @admin_only
 def handle_addchannel(message: types.Message):
-    register_channel(message, category="drama")  # legacy default — use /addA or /addD to be explicit
+    register_channel(message, category="drama")  # legacy default — use /adda or /addd to be explicit
 
 
-@bot.message_handler(commands=["addA"])
+@bot.message_handler(commands=["adda"])
 @admin_only
 def handle_addA(message: types.Message):
     register_channel(message, category="anime")
 
 
-@bot.message_handler(commands=["addD"])
+@bot.message_handler(commands=["addd"])
 @admin_only
 def handle_addD(message: types.Message):
     register_channel(message, category="drama")
@@ -535,13 +535,13 @@ def handle_channels(message: types.Message):
     send_channel_list(message.chat.id, None)
 
 
-@bot.message_handler(commands=["channelA"])
+@bot.message_handler(commands=["channela"])
 @admin_only
 def handle_channelA(message: types.Message):
     send_channel_list(message.chat.id, "anime")
 
 
-@bot.message_handler(commands=["channelD"])
+@bot.message_handler(commands=["channeld"])
 @admin_only
 def handle_channelD(message: types.Message):
     send_channel_list(message.chat.id, "drama")
@@ -550,7 +550,7 @@ def handle_channelD(message: types.Message):
 def channel_list_text_and_keyboard(category: str):
     channels = list(channels_col.find(category_filter(category)))
     if not channels:
-        return "No channels registered in this list yet. Use /add, /addA or /addD first.", None
+        return "No channels registered in this list yet. Use /add, /adda or /addd first.", None
     label = {"anime": "🎌 Anime", "drama": "🎬 Drama"}.get(category, "📋 All")
     return f"{label} channels — pick one to view its details:", channels_keyboard(channels, "viewlinks", category or "all")
 
@@ -1344,12 +1344,12 @@ def register_bot_commands():
     bot.set_my_commands([
         types.BotCommand("start", "Check bot is alive / open admin panel"),
         types.BotCommand("add", "Register a channel (admin)"),
-        types.BotCommand("addA", "Register a channel under Anime (admin)"),
-        types.BotCommand("addD", "Register a channel under Drama (admin)"),
+        types.BotCommand("adda", "Register a channel under Anime (admin)"),
+        types.BotCommand("addd", "Register a channel under Drama (admin)"),
         types.BotCommand("del", "Remove a registered channel (admin)"),
         types.BotCommand("channels", "View a channel's join link & posts (admin)"),
-        types.BotCommand("channelA", "View Anime channels only (admin)"),
-        types.BotCommand("channelD", "View Drama channels only (admin)"),
+        types.BotCommand("channela", "View Anime channels only (admin)"),
+        types.BotCommand("channeld", "View Drama channels only (admin)"),
         types.BotCommand("links", "List all channels & their join links (admin)"),
         types.BotCommand("ch_links", "List raw invite links for all channels (admin)"),
         types.BotCommand("reqlink", "Get a fresh join-request link (admin)"),
