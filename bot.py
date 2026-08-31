@@ -15,6 +15,8 @@ Commands:
   /addanime                 - same, but registers the channel under Anime
   /adddrama                 - same, but registers the channel under Drama
   /del   (/removechannel)  - pick a channel to remove (any category)
+  /setcategory              - pick an already-registered channel -> set it to
+                               Anime or Drama (no need to re-forward its post)
   /channels                - browse ALL registered channels A-Z (admin view)
   /animechannel             - same, filtered to Anime channels only
   /dramachannel             - same, filtered to Drama channels only
@@ -76,18 +78,28 @@ from waitress import serve
 from pymongo import MongoClient
 
 # ============ CONFIG — fill in your own values ============
-BOT_TOKEN = "8858477524:AAEzBMLRIBOD-Olw26s276TgWVMldscXhbE"          # from @BotFather
+BOT_TOKEN = "8858477524:AAFOsNV84c4B1hA8hf6cqqZgmQsvDtxDA-4"          # from @BotFather
 ADMIN_IDS = [8590705407]                          # owner user ID(s) — always admin, can't be removed
 
 MONGO_URI = "mongodb+srv://Alizenx:alizenx@cluster0.brrejva.mongodb.net/?appName=Cluster0"         # e.g. mongodb+srv://user:pass@cluster.mongodb.net
 MONGO_DB_NAME = "Alizenx"
 
-WELCOME_PHOTO_URL = "https://graph.org/file/5f305da3db21356acaaed-add2d3d5831a7b6767.mp4"
-WELCOME_TEXT = "👋 Welcome!\n\nOpen a post link to access content."
+WELCOME_MEDIA_URL = "https://graph.org/file/5f305da3db21356acaaed-add2d3d5831a7b6767.mp4"   # photo (jpg/png) or video (mp4) URL
+WELCOME_MEDIA_TYPE = "video"                              # "photo" or "video" — must match WELCOME_MEDIA_URL above
+WELCOME_TEXT = """
+**ʜɪ ᴛʜᴇʀᴇ......! ›› ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴏᴜʀ ʟɪɴᴋ ꜱʜᴀʀɪɴɢ ʙᴏᴛ ‹‹**
+
+**ʜᴇʀᴇ ʏᴏᴜ ᴄᴀɴ ǫᴜɪᴄᴋʟʏ ᴀᴄᴄᴇss ᴀɴᴅ ꜱʜᴀʀᴇ ᴛᴇʟᴇɢʀᴀᴍ ʟɪɴᴋꜱ.
+ᴏᴜʀ ʙᴏᴛ ɪꜱ ᴅᴇꜱɪɢɴᴇᴅ ᴛᴏ ᴍᴀᴋᴇ ʟɪɴᴋ ꜱʜᴀʀɪɴɢ ꜱɪᴍᴘʟᴇ, ꜰᴀꜱᴛ ᴀɴᴅ ᴄᴏɴᴠᴇɴɪᴇɴᴛ.**
+
+━━━━━━━━━━━━━━━━━━
+
+**‣ ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ :** [ʀᴀʀᴇ ᴀɴɪᴍᴇ ʜᴜʙ](https://t.me/Rare_Anime_Hub)
+"""
 ABOUT_TEXT = "ℹ️ <b>About this bot</b>\n\nInstant access to exclusive Telegram channel links.\n\nMaintained by: <b>Eric Realm</b>"
 
 DEFAULT_LINK_EXPIRY_SECONDS = 5 * 60     # default join-request link lifetime, overridable via /reqtime
-EXTRA_BUTTON_LABEL = "🌐 @Eric_Realm"
+EXTRA_BUTTON_LABEL = "• JOIN MY UPDATES •"
 EXTRA_BUTTON_URL = "https://t.me/Eric_Realm"
 # ==============================================================
 
@@ -252,16 +264,16 @@ def request_join_keyboard(invite_link: str, label="📢 Request to Join Channel"
     return kb
 
 
-def approved_keyboard(channel_url: str, post_link: str = None):
-    """Shown once a join request is approved: optional post link, plus the two
-    standard promo buttons. channel_url is the same 5-min request link the
-    user just used — reopening it drops an existing member straight into the
-    channel (no re-request needed since they're already a member)."""
+def approved_keyboard(channel_url: str, channel_title: str, post_link: str = None):
+    """Shown once a join request is approved: optional post link, plus
+    "JOIN MY UPDATES" and "JOIN <channel>" buttons. channel_url is the same
+    5-min request link the user just used — reopening it drops an existing
+    member straight into the channel (no re-request needed)."""
     kb = types.InlineKeyboardMarkup()
     if post_link:
         kb.add(types.InlineKeyboardButton("🔗 Open Post", url=post_link))
     kb.add(types.InlineKeyboardButton(EXTRA_BUTTON_LABEL, url=EXTRA_BUTTON_URL))
-    kb.add(types.InlineKeyboardButton("✅ Approve Channel", url=channel_url))
+    kb.add(types.InlineKeyboardButton(f"• JOIN {channel_title} •", url=channel_url))
     return kb
 
 
@@ -306,7 +318,7 @@ def send_admin_panel(chat_id):
 # Every inline button uses callback_data "prefix:payload". One handler routes
 # them all instead of one @callback_query_handler per action.
 CALLBACK_HANDLERS = {}
-PUBLIC_CALLBACK_PREFIXES = {"idxmenu", "idxletter", "idxback", "idxclose", "about"}  # usable by any user, not just admins
+PUBLIC_CALLBACK_PREFIXES = {"idxmenu", "idxletter", "idxback", "idxclose", "about", "getlink"}  # usable by any user, not just admins
 
 
 def on_callback(prefix):
@@ -328,6 +340,48 @@ def route_callback(call: types.CallbackQuery):
 # =========================================================================
 # /start
 # =========================================================================
+def send_join_request_prompt(chat_id: int, user_id: int, first_name: str, post_code: str, channel_id: int, has_post: bool, message_id: int = None):
+    """Creates a fresh 5-min join-request invite and shows the 'Request to
+    Join' button. Edits message_id in place when given (used by the 'Get
+    Link' regenerate button), otherwise sends a new message."""
+    try:
+        expire_ts = int(time.time()) + link_expiry_seconds()
+        invite = bot.create_chat_invite_link(chat_id=channel_id, name=f"req-{post_code}-{user_id}", expire_date=expire_ts, creates_join_request=True)
+    except Exception as e:
+        error_text = f"❌ Could not create invite link. Ensure the bot is admin with 'Invite Users via Link' permission.\n\n({e})"
+        if message_id:
+            try:
+                bot.edit_message_text(error_text, chat_id=chat_id, message_id=message_id)
+                return
+            except Exception:
+                pass
+        bot.send_message(chat_id, error_text)
+        return
+
+    requests_col.insert_one({
+        "_id": invite.invite_link, "post_code": post_code, "channel_id": channel_id,
+        "user_id": user_id, "created_at": time.time(),
+    })
+
+    wait_line = "⚠️ You need to join the channel to access this post.\n" if has_post else "⚠️ You need to join the channel first.\n"
+    approved_line = "and you'll receive the post link right after." if has_post else "and you'll be all set."
+    minutes = link_expiry_seconds() // 60
+    greeting = f"Hey {html_lib.escape(first_name)},\n\n" if first_name else ""
+    text = (
+        greeting + wait_line +
+        f"⏳ The link below is valid for {minutes} minute(s) only.\n\n"
+        f"Once your request is sent, it will be approved automatically {approved_line}"
+    )
+    kb = request_join_keyboard(invite.invite_link)
+    if message_id:
+        try:
+            bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb)
+            return
+        except Exception:
+            pass
+    bot.send_message(chat_id, text, reply_markup=kb)
+
+
 @bot.message_handler(commands=["start"])
 def handle_start(message: types.Message):
     args = message.text.split(maxsplit=1)
@@ -342,8 +396,11 @@ def handle_start(message: types.Message):
         )
         welcome_kb.add(types.InlineKeyboardButton("• CLOSE •", callback_data="idxclose:x"))
         try:
-            bot.send_photo(message.chat.id, WELCOME_PHOTO_URL, caption=WELCOME_TEXT, reply_markup=welcome_kb)
-        except Exception:
+            send_media = bot.send_video if WELCOME_MEDIA_TYPE == "video" else bot.send_photo
+            send_media(message.chat.id, WELCOME_MEDIA_URL, caption=WELCOME_TEXT, reply_markup=welcome_kb)
+        except Exception as e:
+            print(f"Welcome media failed: {e}")
+            alert_admins(f"⚠️ Welcome {WELCOME_MEDIA_TYPE} failed to send — falling back to text.\nURL: {WELCOME_MEDIA_URL}\nError: {html_lib.escape(str(e))}")
             bot.send_message(message.chat.id, WELCOME_TEXT, reply_markup=welcome_kb)
         if is_admin(user_id):
             send_admin_panel(message.chat.id)
@@ -358,36 +415,20 @@ def handle_start(message: types.Message):
 
     channel_id = post["channel_id"]
     has_post = bool(post.get("message_id"))
+    send_join_request_prompt(message.chat.id, user_id, message.from_user.first_name, post_code, channel_id, has_post)
 
-    try:
-        expire_ts = int(time.time()) + link_expiry_seconds()
-        invite = bot.create_chat_invite_link(
-            chat_id=channel_id,
-            name=f"req-{post_code}-{user_id}",
-            expire_date=expire_ts,
-            creates_join_request=True,
-        )
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Could not create invite link. Ensure the bot is admin with 'Invite Users via Link' permission.\n\n({e})")
+
+@on_callback("getlink")
+def cb_getlink(call, payload):
+    post_code = payload
+    post = posts_col.find_one({"_id": post_code})
+    if not post:
+        bot.answer_callback_query(call.id, "❌ This link is invalid.", show_alert=True)
         return
-
-    requests_col.insert_one({
-        "_id": invite.invite_link,
-        "post_code": post_code,
-        "channel_id": channel_id,
-        "user_id": user_id,
-        "created_at": time.time(),
-    })
-
-    wait_line = "⚠️ You need to join the channel to access this post.\n" if has_post else "⚠️ You need to join the channel first.\n"
-    approved_line = "and you'll receive the post link right after." if has_post else "and you'll be all set."
-    minutes = link_expiry_seconds() // 60
-    bot.send_message(
-        message.chat.id,
-        wait_line +
-        f"⏳ The link below is valid for {minutes} minute(s) only.\n\n"
-        f"Once your request is sent, it will be approved automatically {approved_line}",
-        reply_markup=request_join_keyboard(invite.invite_link),
+    bot.answer_callback_query(call.id)
+    send_join_request_prompt(
+        call.message.chat.id, call.from_user.id, call.from_user.first_name,
+        post_code, post["channel_id"], bool(post.get("message_id")), message_id=call.message.message_id,
     )
 
 
@@ -675,6 +716,49 @@ def handle_channelD(message: types.Message):
 def send_channel_picker_view(message):
     text, kb = index_menu_content("all")
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+
+# =========================================================================
+# /setcategory — reassign an existing channel's category (Anime/Drama)
+# without needing to re-forward its post
+# =========================================================================
+@bot.message_handler(commands=["setcategory"])
+@admin_only
+def handle_setcategory(message: types.Message):
+    channels = list(channels_col.find({}))
+    if not channels:
+        bot.reply_to(message, "No channels registered yet.")
+        return
+    bot.reply_to(message, "🏷 Pick a channel to set its category:", reply_markup=channels_keyboard(channels, "setcat"))
+
+
+@on_callback("setcat")
+def cb_setcat(call, payload):
+    channel_id = int(payload)
+    channel = channels_col.find_one({"_id": channel_id})
+    title = html_lib.escape(channel["title"] if channel else str(channel_id))
+    current = (channel or {}).get("category", "drama")
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("🎌 Anime", callback_data=f"setcatpick:anime:{channel_id}"),
+        types.InlineKeyboardButton("🎬 Drama", callback_data=f"setcatpick:drama:{channel_id}"),
+    )
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        f"🏷 <b>{title}</b>\nCurrent category: {current}\n\nSet to:",
+        chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML", reply_markup=kb,
+    )
+
+
+@on_callback("setcatpick")
+def cb_setcatpick(call, payload):
+    category, channel_id_str = payload.split(":", 1)
+    channel_id = int(channel_id_str)
+    channels_col.update_one({"_id": channel_id}, {"$set": {"category": category}})
+    channel = channels_col.find_one({"_id": channel_id})
+    title = html_lib.escape(channel["title"] if channel else str(channel_id))
+    bot.answer_callback_query(call.id, "Updated.")
+    bot.edit_message_text(f"✅ <b>{title}</b> set to {category}.", chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML")
 
 
 # =========================================================================
@@ -1280,7 +1364,9 @@ def handle_join_request(request: types.ChatJoinRequest):
         except Exception:
             pass
         try:
-            bot.send_message(request.from_user.id, "⏰ This request link expired. Please reopen the post link.")
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("🔗 Get Link", callback_data=f"getlink:{entry['post_code']}"))
+            bot.send_message(request.from_user.id, "❌ Link has been expired! Click 'Get Link' to generate a new one.", reply_markup=kb)
         except Exception:
             pass
         requests_col.delete_one({"_id": used_link})
@@ -1301,9 +1387,10 @@ def handle_join_request(request: types.ChatJoinRequest):
 
     post = posts_col.find_one({"_id": entry["post_code"]})
     post_link = channel_post_link(channel_id, post["message_id"]) if post and post.get("message_id") else None
-    caption = "✅ You've been added to the channel! Access your post:" if post_link else f"✅ You've been added to {(channel or {}).get('title', 'the channel')}!"
+    channel_title = (channel or {}).get("title", "the channel")
+    caption = f"Hey {html_lib.escape(request.from_user.first_name or '')},\n\nYour request to join <b>{html_lib.escape(channel_title)}</b> has been approved."
     try:
-        bot.send_message(request.from_user.id, caption, reply_markup=approved_keyboard(used_link, post_link))
+        bot.send_message(request.from_user.id, caption, parse_mode="HTML", reply_markup=approved_keyboard(used_link, channel_title, post_link))
     except Exception as e:
         print(f"DM failed (user may have blocked the bot): {e}")
 
@@ -1327,6 +1414,7 @@ def register_bot_commands():
         types.BotCommand("addanime", "Register a channel under Anime (admin)"),
         types.BotCommand("adddrama", "Register a channel under Drama (admin)"),
         types.BotCommand("del", "Remove a registered channel (admin)"),
+        types.BotCommand("setcategory", "Set an existing channel's category (admin)"),
         types.BotCommand("channels", "Browse all channels A-Z (admin)"),
         types.BotCommand("animechannel", "Browse Anime channels A-Z (admin)"),
         types.BotCommand("dramachannel", "Browse Drama channels A-Z (admin)"),
