@@ -82,7 +82,7 @@ ADMIN_IDS = [8590705407]                          # owner user ID(s) — always 
 MONGO_URI = "mongodb+srv://Alizenx:alizenx@cluster0.brrejva.mongodb.net/?appName=Cluster0"         # e.g. mongodb+srv://user:pass@cluster.mongodb.net
 MONGO_DB_NAME = "Alizenx"
 
-WELCOME_PHOTO_URL = "https://example.com/welcome.jpg"
+WELCOME_PHOTO_URL = "https://graph.org/file/5f305da3db21356acaaed-add2d3d5831a7b6767.mp4"
 WELCOME_TEXT = "👋 Welcome!\n\nOpen a post link to access content."
 ABOUT_TEXT = "ℹ️ <b>About this bot</b>\n\nInstant access to exclusive Telegram channel links.\n\nMaintained by: <b>Eric Realm</b>"
 
