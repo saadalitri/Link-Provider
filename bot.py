@@ -5,16 +5,19 @@ Commands:
   /start                   - welcome message with photo; admins also get the
                               admin panel (menu of every action below)
   /start <code>            - open a specific post link
+  /index [anime|drama]     - PUBLIC: browse channels A-Z with pagination
+                              (always live off registered channels — no separate
+                              indexing step needed)
 
   /add   (/addchannel)     - register a channel (category: drama, legacy default)
                               (reply to a forwarded post from that channel);
                               also generates a link for that specific post
-  /adda                     - same, but registers the channel under Anime
-  /addd                     - same, but registers the channel under Drama
+  /addanime                 - same, but registers the channel under Anime
+  /adddrama                 - same, but registers the channel under Drama
   /del   (/removechannel)  - pick a channel to remove (any category)
-  /channels                - pick any channel -> see its join link & post links
-  /channela                - same, filtered to Anime channels only
-  /channeld                - same, filtered to Drama channels only
+  /channels                - browse ALL registered channels A-Z (admin view)
+  /animechannel             - same, filtered to Anime channels only
+  /dramachannel             - same, filtered to Drama channels only
   /links (/channelslist)   - flat list of every channel with its join link
   /ch_links                - flat list of every channel's invite/join link only
   /reqlink                 - pick a channel -> get a fresh instant join-request link
@@ -23,14 +26,6 @@ Commands:
   /bulklink <count>        - generate <count> separate link codes for one post
                               (reply to a forwarded post)
   /delpostlink <code>      - delete/revoke a post link by its code
-
-  --- Alphabetical index channels (e.g. a separate 🇦🇧🇨 drama/anime index) ---
-  /setindex <category>      - reply to a post from the index channel to register it
-                               for that category (e.g. drama, anime)
-  /indexadd <category> <Title>    - reply to a content post: generates its link and
-                                      adds/updates the Title under the right letter
-                                      section in that category's index channel
-  /indexremove <category> <Title> - remove a title from its index section
 
   --- Admins ---
   /addadmin <user_id>      - grant admin access
@@ -73,6 +68,7 @@ import string
 import random
 import time
 import threading
+import math
 import html as html_lib
 import traceback
 from flask import Flask
@@ -88,6 +84,7 @@ MONGO_DB_NAME = "Alizenx"
 
 WELCOME_PHOTO_URL = "https://example.com/welcome.jpg"
 WELCOME_TEXT = "👋 Welcome!\n\nOpen a post link to access content."
+ABOUT_TEXT = "ℹ️ <b>About this bot</b>\n\nInstant access to exclusive Telegram channel links.\n\nMaintained by: <b>Eric Realm</b>"
 
 DEFAULT_LINK_EXPIRY_SECONDS = 5 * 60     # default join-request link lifetime, overridable via /reqtime
 EXTRA_BUTTON_LABEL = "🌐 @Eric_Realm"
@@ -132,7 +129,6 @@ autoforward_col = db.autoforward if db is not None else None # _id: db_channel_i
 admins_col = db.admins if db is not None else None           # _id: user_id
 users_col = db.users if db is not None else None             # _id: user_id, last_seen
 settings_col = db.settings if db is not None else None       # _id: setting key
-index_col = db.index_sections if db is not None else None    # _id: "<category>:<letter>", channel_id, message_id, entries: [{title, link}]
 
 
 # ---------- Health check web server (Render + UptimeRobot) ----------
@@ -185,28 +181,6 @@ def letter_key(title: str) -> str:
 
 def letter_flag(letter: str) -> str:
     return chr(0x1F1E6 + (ord(letter) - ord("A"))) if letter.isalpha() else "#️⃣"
-
-
-def rebuild_index_section(category: str, letter: str):
-    """Re-renders one letter's section message in its index channel from the
-    entries currently stored for it — creating the message the first time,
-    editing it on every entry add/remove after that."""
-    doc = index_col.find_one({"_id": f"{category}:{letter}"})
-    if not doc:
-        return
-    entries = sorted(doc.get("entries", []), key=lambda e: e["title"].lower())
-    header = f"✦✧ {category.upper()} INDEX ✧✦\n══════════════════════\n✨✦ {letter_flag(letter)} ✦✨\n══════════════════════\n\n"
-    body = "\n\n".join(f"✦ <a href=\"{e['link']}\">{html_lib.escape(e['title'])}</a> ✧" for e in entries) or "Reserved"
-    text = header + body
-
-    if doc.get("message_id"):
-        try:
-            bot.edit_message_text(text, chat_id=doc["channel_id"], message_id=doc["message_id"], parse_mode="HTML")
-            return
-        except Exception as e:
-            print(f"Index section edit failed ({category}:{letter}): {e}")
-    sent = bot.send_message(doc["channel_id"], text, parse_mode="HTML")
-    index_col.update_one({"_id": f"{category}:{letter}"}, {"$set": {"message_id": sent.message_id}})
 
 
 def channel_post_link(channel_id: int, message_id: int) -> str:
@@ -332,6 +306,7 @@ def send_admin_panel(chat_id):
 # Every inline button uses callback_data "prefix:payload". One handler routes
 # them all instead of one @callback_query_handler per action.
 CALLBACK_HANDLERS = {}
+PUBLIC_CALLBACK_PREFIXES = {"idxmenu", "idxletter", "idxback", "idxclose", "about"}  # usable by any user, not just admins
 
 
 def on_callback(prefix):
@@ -343,10 +318,10 @@ def on_callback(prefix):
 
 @bot.callback_query_handler(func=lambda call: ":" in call.data and call.data.split(":", 1)[0] in CALLBACK_HANDLERS)
 def route_callback(call: types.CallbackQuery):
-    if not is_admin(call.from_user.id):
+    prefix, _, payload = call.data.partition(":")
+    if prefix not in PUBLIC_CALLBACK_PREFIXES and not is_admin(call.from_user.id):
         bot.answer_callback_query(call.id, "❌ Admin only.", show_alert=True)
         return
-    prefix, _, payload = call.data.partition(":")
     CALLBACK_HANDLERS[prefix](call, payload)
 
 
@@ -360,10 +335,16 @@ def handle_start(message: types.Message):
     track_user(user_id)
 
     if len(args) < 2:
+        welcome_kb = types.InlineKeyboardMarkup(row_width=2)
+        welcome_kb.add(
+            types.InlineKeyboardButton("• ABOUT •", callback_data="about:show"),
+            types.InlineKeyboardButton("• CHANNELS •", callback_data="idxmenu:pick"),
+        )
+        welcome_kb.add(types.InlineKeyboardButton("• CLOSE •", callback_data="idxclose:x"))
         try:
-            bot.send_photo(message.chat.id, WELCOME_PHOTO_URL, caption=WELCOME_TEXT)
+            bot.send_photo(message.chat.id, WELCOME_PHOTO_URL, caption=WELCOME_TEXT, reply_markup=welcome_kb)
         except Exception:
-            bot.send_message(message.chat.id, WELCOME_TEXT)
+            bot.send_message(message.chat.id, WELCOME_TEXT, reply_markup=welcome_kb)
         if is_admin(user_id):
             send_admin_panel(message.chat.id)
         return
@@ -411,6 +392,146 @@ def handle_start(message: types.Message):
 
 
 # =========================================================================
+# Public A-Z index browser — /index, /index anime, /index drama
+# (open to every user, not just admins; reads the data built by
+#  /add, /addanime and /adddrama, but never posts to an external channel —
+#  this is a purely in-bot, button-driven browsing menu)
+# =========================================================================
+def index_menu_content(category: str = None):
+    if category not in ("anime", "drama", "all"):
+        text = "📚 <b>CHANNEL INDEX MENU</b>\n\nChoose a category:"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton("🎌 Anime", callback_data="idxmenu:anime"),
+            types.InlineKeyboardButton("🎬 Drama", callback_data="idxmenu:drama"),
+        )
+        kb.add(types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"))
+        return text, kb
+
+    label = {"anime": "🎌 Anime", "drama": "🎬 Drama", "all": "📋 All"}[category]
+    text = (
+        f"📚 <b>{label} INDEX MENU</b>\n\n"
+        "Select any alphabet from the buttons below\n"
+        "to get the list of all channels starting with that letter!"
+    )
+    kb = types.InlineKeyboardMarkup(row_width=5)
+    kb.add(*[types.InlineKeyboardButton(L, callback_data=f"idxletter:{category}:{L}:1") for L in string.ascii_uppercase])
+    kb.add(types.InlineKeyboardButton("#", callback_data=f"idxletter:{category}:#:1"))
+    kb.add(types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"))
+    return text, kb
+
+
+def channels_for_letter(category: str, letter: str):
+    """Every registered channel in this category whose title starts with this
+    letter — the index is always live off channels_col, so /add, /addanime,
+    and /adddrama update it automatically with no separate bookkeeping."""
+    bot_username = bot.get_me().username
+    matches = []
+    for c in channels_col.find(category_filter(category)):
+        title = c.get("title", str(c["_id"]))
+        if letter_key(title) != letter:
+            continue
+        link = f"https://t.me/{bot_username}?start={c['join_code']}" if c.get("join_code") else channel_display_link(c["_id"])
+        matches.append({"title": title, "link": link})
+    return sorted(matches, key=lambda e: e["title"].lower())
+
+
+def index_letter_page_content(category: str, letter: str, page: int):
+    entries = channels_for_letter(category, letter)
+    label = {"anime": "🎌 Anime", "drama": "🎬 Drama", "all": "📋 All"}.get(category, category.upper())
+    header = f"📚 <b>{label} INDEX</b> {letter_flag(letter)}\n\n"
+
+    if not entries:
+        kb = types.InlineKeyboardMarkup()
+        kb.row(
+            types.InlineKeyboardButton("🔙 Back to Index", callback_data=f"idxback:{category}"),
+            types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"),
+        )
+        return header + "No channels yet under this letter.", kb
+
+    per_page = 10
+    total_pages = max(1, math.ceil(len(entries) / per_page))
+    page = max(1, min(page, total_pages))
+    page_entries = entries[(page - 1) * per_page: page * per_page]
+
+    body = "\n\n".join(f"✦ <a href=\"{e['link']}\">{html_lib.escape(e['title'])}</a> ✧" for e in page_entries)
+    footer = f"\n\n📁 Page: {page}/{total_pages} | Total: {len(entries)}"
+    text = header + body + footer
+
+    kb = types.InlineKeyboardMarkup()
+    nav = []
+    if page > 1:
+        nav.append(types.InlineKeyboardButton("◀ Prev", callback_data=f"idxletter:{category}:{letter}:{page - 1}"))
+    if page < total_pages:
+        nav.append(types.InlineKeyboardButton("Next ▶", callback_data=f"idxletter:{category}:{letter}:{page + 1}"))
+    if nav:
+        kb.row(*nav)
+    kb.row(
+        types.InlineKeyboardButton("🔙 Back to Index", callback_data=f"idxback:{category}"),
+        types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"),
+    )
+    return text, kb
+
+
+def show_index_content(call, text: str, kb):
+    """Edits the triggering message in place when possible (plain-text
+    messages), falling back to a new message when it can't be edited
+    (e.g. the /start welcome message, which is a photo)."""
+    try:
+        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
+                               parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
+    except Exception:
+        bot.send_message(call.message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
+
+
+@bot.message_handler(commands=["index"])
+def handle_index_public(message: types.Message):
+    args = message.text.split()
+    category = args[1].lower() if len(args) >= 2 else None
+    text, kb = index_menu_content(category)
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
+
+
+@on_callback("idxmenu")
+def cb_idxmenu(call, payload):
+    text, kb = index_menu_content(payload)
+    bot.answer_callback_query(call.id)
+    show_index_content(call, text, kb)
+
+
+@on_callback("idxletter")
+def cb_idxletter(call, payload):
+    category, letter, page_str = payload.split(":")
+    text, kb = index_letter_page_content(category, letter, int(page_str))
+    bot.answer_callback_query(call.id)
+    show_index_content(call, text, kb)
+
+
+@on_callback("idxback")
+def cb_idxback(call, payload):
+    text, kb = index_menu_content(payload)
+    bot.answer_callback_query(call.id)
+    show_index_content(call, text, kb)
+
+
+@on_callback("idxclose")
+def cb_idxclose(call, payload):
+    bot.answer_callback_query(call.id)
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+
+
+@on_callback("about")
+def cb_about(call, payload):
+    bot.answer_callback_query(call.id)
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"))
+    show_index_content(call, ABOUT_TEXT, kb)
+
+
+# =========================================================================
 # Admin panel menu routing (panel itself is shown from /start — see send_admin_panel)
 # =========================================================================
 @bot.callback_query_handler(func=lambda call: call.data.startswith("menu:"))
@@ -455,7 +576,7 @@ def register_channel(message: types.Message, category: str):
         bot.reply_to(
             message,
             "❌ First forward any post from the channel into this chat, "
-            "then reply to that forwarded message with /add (or /adda, /addd).",
+            "then reply to that forwarded message with /add (or /addanime, /adddrama).",
         )
         return
 
@@ -486,7 +607,7 @@ def register_channel(message: types.Message, category: str):
     permanent_link = f"https://t.me/{bot_username}?start={join_code}"
     safe_title = html_lib.escape(chat.title or str(chat.id))
 
-    # Also generate a link for the replied-to post itself (reused later by /indexadd).
+    # Also generate a link for the replied-to post itself.
     post_line = ""
     original_msg_id = replied.forward_from_message_id
     if original_msg_id:
@@ -511,108 +632,49 @@ def register_channel(message: types.Message, category: str):
 @bot.message_handler(commands=["addchannel", "add"])
 @admin_only
 def handle_addchannel(message: types.Message):
-    register_channel(message, category="drama")  # legacy default — use /adda or /addd to be explicit
+    register_channel(message, category="drama")  # legacy default — use /addanime or /adddrama to be explicit
 
 
-@bot.message_handler(commands=["adda"])
+@bot.message_handler(commands=["addanime"])
 @admin_only
 def handle_addA(message: types.Message):
     register_channel(message, category="anime")
 
 
-@bot.message_handler(commands=["addd"])
+@bot.message_handler(commands=["adddrama"])
 @admin_only
 def handle_addD(message: types.Message):
     register_channel(message, category="drama")
 
 
 # =========================================================================
-# /channels — pick a channel -> see its join link + post links
+# /channels, /animechannel, /dramachannel — browse registered channels A-Z
+# (same index UI as public /index, always live off channels_col)
 # =========================================================================
 @bot.message_handler(commands=["channels"])
 @admin_only
 def handle_channels(message: types.Message):
-    send_channel_list(message.chat.id, None)
+    text, kb = index_menu_content("all")
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
-@bot.message_handler(commands=["channela"])
+@bot.message_handler(commands=["animechannel"])
 @admin_only
 def handle_channelA(message: types.Message):
-    send_channel_list(message.chat.id, "anime")
+    text, kb = index_menu_content("anime")
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
-@bot.message_handler(commands=["channeld"])
+@bot.message_handler(commands=["dramachannel"])
 @admin_only
 def handle_channelD(message: types.Message):
-    send_channel_list(message.chat.id, "drama")
-
-
-def channel_list_text_and_keyboard(category: str):
-    channels = list(channels_col.find(category_filter(category)))
-    if not channels:
-        return "No channels registered in this list yet. Use /add, /adda or /addd first.", None
-    label = {"anime": "🎌 Anime", "drama": "🎬 Drama"}.get(category, "📋 All")
-    return f"{label} channels — pick one to view its details:", channels_keyboard(channels, "viewlinks", category or "all")
-
-
-def send_channel_list(chat_id: int, category: str, message_id: int = None):
-    text, kb = channel_list_text_and_keyboard(category)
-    if message_id:
-        bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb)
-    else:
-        bot.send_message(chat_id, text, reply_markup=kb)
+    text, kb = index_menu_content("drama")
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 def send_channel_picker_view(message):
-    send_channel_list(message.chat.id, None)
-
-
-@on_callback("viewlinks")
-def cb_view_links(call, payload):
-    channel_id_str, _, category = payload.partition(":")
-    channel_id = int(channel_id_str)
-    category = category or "all"
-
-    channel = channels_col.find_one({"_id": channel_id})
-    posts = list(posts_col.find({"channel_id": channel_id}))
-    bot_username = bot.get_me().username
-
-    title = html_lib.escape(channel["title"] if channel else str(channel_id))
-    original_link = channel_display_link(channel_id)
-    bot_req_link = f"https://t.me/{bot_username}?start={channel['join_code']}" if channel and channel.get("join_code") else "—"
-    approve_state = "ON ✅" if (channel or {}).get("approve", True) else "OFF 🚫"
-
-    real_posts = [p for p in posts if p.get("message_id")]
-    lines = [
-        f"<b>{title}</b>",
-        f"📢 Join Link: {html_lib.escape(original_link)}",
-        f"🤖 Bot Req link: {html_lib.escape(bot_req_link)}",
-        f"⚙️ Auto-approve: {approve_state}",
-        "",
-    ]
-    if real_posts:
-        lines.append("Post links:")
-        for p in real_posts:
-            link = f"https://t.me/{bot_username}?start={p['_id']}"
-            lines.append(f"<code>{p['_id']}</code> — <a href=\"{link}\">Open</a>")
-    else:
-        lines.append("No post links yet.")
-
-    back_kb = types.InlineKeyboardMarkup()
-    back_kb.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"backlist:{category}"))
-
-    bot.answer_callback_query(call.id)
-    bot.edit_message_text(
-        "\n".join(lines), chat_id=call.message.chat.id, message_id=call.message.message_id,
-        parse_mode="HTML", disable_web_page_preview=True, reply_markup=back_kb,
-    )
-
-
-@on_callback("backlist")
-def cb_backlist(call, payload):
-    category = None if payload == "all" else payload
-    bot.answer_callback_query(call.id)
-    send_channel_list(call.message.chat.id, category, message_id=call.message.message_id)
+    text, kb = index_menu_content("all")
+    bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 # =========================================================================
@@ -820,89 +882,6 @@ def handle_delpostlink(message: types.Message):
         bot.reply_to(message, "❌ No such post code found.")
         return
     bot.reply_to(message, f"✅ Link <code>{code}</code> has been deleted.", parse_mode="HTML")
-
-
-# =========================================================================
-# Alphabetical index channels — /setindex, /indexadd, /indexremove
-# =========================================================================
-@bot.message_handler(commands=["setindex"])
-@admin_only
-def handle_setindex(message: types.Message):
-    args = message.text.split()
-    replied = message.reply_to_message
-    if len(args) < 2 or replied is None or replied.forward_from_chat is None:
-        bot.reply_to(message, "Usage: forward a post from the index channel here, then reply to it with /setindex <category>\nExample: /setindex drama")
-        return
-    category = args[1].lower()
-    set_setting(f"index_channel:{category}", replied.forward_from_chat.id)
-    bot.reply_to(message, f"✅ Index channel for <b>{html_lib.escape(category)}</b> set to {html_lib.escape(replied.forward_from_chat.title or str(replied.forward_from_chat.id))}.", parse_mode="HTML")
-
-
-@bot.message_handler(commands=["indexadd"])
-@admin_only
-def handle_indexadd(message: types.Message):
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        bot.reply_to(message, "Usage: reply to the post with /indexadd <category> <Title>\nExample: /indexadd drama Alice in Borderland")
-        return
-    category, title = args[1].lower(), args[2].strip()
-
-    index_channel_id = get_setting(f"index_channel:{category}", None)
-    if not index_channel_id:
-        bot.reply_to(message, f"❌ No index channel set for '{category}' yet. Use /setindex {category} first.")
-        return
-
-    channel_id, original_msg_id, error = _resolve_forwarded_post(message)
-    if error:
-        bot.reply_to(message, error)
-        return
-    if not channels_col.find_one({"_id": channel_id}):
-        bot.reply_to(message, f"❌ This content channel isn't registered yet.\nID: <code>{channel_id}</code>\n\nUse /add first.", parse_mode="HTML")
-        return
-
-    bot_username = bot.get_me().username
-    existing_post = posts_col.find_one({"channel_id": channel_id, "message_id": original_msg_id})
-    if existing_post:
-        post_code = existing_post["_id"]
-    else:
-        post_code = "P" + generate_code(5)
-        posts_col.insert_one({"_id": post_code, "channel_id": channel_id, "message_id": original_msg_id, "created_at": time.time()})
-    link = f"https://t.me/{bot_username}?start={post_code}"
-
-    letter = letter_key(title)
-    section_id = f"{category}:{letter}"
-    index_col.update_one(
-        {"_id": section_id},
-        {"$set": {"channel_id": index_channel_id}, "$setOnInsert": {"message_id": None, "entries": []}},
-        upsert=True,
-    )
-    index_col.update_one({"_id": section_id}, {"$push": {"entries": {"title": title, "link": link}}})
-    rebuild_index_section(category, letter)
-
-    bot.reply_to(message, f"✅ Added <b>{html_lib.escape(title)}</b> to the {html_lib.escape(category)} index under {letter_flag(letter)}.\n🔗 {link}", parse_mode="HTML")
-
-
-@bot.message_handler(commands=["indexremove"])
-@admin_only
-def handle_indexremove(message: types.Message):
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        bot.reply_to(message, "Usage: /indexremove <category> <Title>\nExample: /indexremove drama Alice in Borderland")
-        return
-    category, title = args[1].lower(), args[2].strip()
-    letter = letter_key(title)
-    section_id = f"{category}:{letter}"
-    doc = index_col.find_one({"_id": section_id})
-    if not doc:
-        bot.reply_to(message, "❌ No such index section found.")
-        return
-    remaining = [e for e in doc.get("entries", []) if e["title"].lower() != title.lower()]
-    if len(remaining) == len(doc.get("entries", [])):
-        bot.reply_to(message, "❌ That title wasn't found in this section.")
-        return
-    index_col.update_one({"_id": section_id}, {"$set": {"entries": remaining}})
-    rebuild_index_section(category, letter)
-    bot.reply_to(message, f"✅ Removed <b>{html_lib.escape(title)}</b> from the {html_lib.escape(category)} index.", parse_mode="HTML")
 
 
 # =========================================================================
@@ -1343,22 +1322,20 @@ def cleanup_expired_loop():
 def register_bot_commands():
     bot.set_my_commands([
         types.BotCommand("start", "Check bot is alive / open admin panel"),
+        types.BotCommand("index", "Browse channels A-Z"),
         types.BotCommand("add", "Register a channel (admin)"),
-        types.BotCommand("adda", "Register a channel under Anime (admin)"),
-        types.BotCommand("addd", "Register a channel under Drama (admin)"),
+        types.BotCommand("addanime", "Register a channel under Anime (admin)"),
+        types.BotCommand("adddrama", "Register a channel under Drama (admin)"),
         types.BotCommand("del", "Remove a registered channel (admin)"),
-        types.BotCommand("channels", "View a channel's join link & posts (admin)"),
-        types.BotCommand("channela", "View Anime channels only (admin)"),
-        types.BotCommand("channeld", "View Drama channels only (admin)"),
+        types.BotCommand("channels", "Browse all channels A-Z (admin)"),
+        types.BotCommand("animechannel", "Browse Anime channels A-Z (admin)"),
+        types.BotCommand("dramachannel", "Browse Drama channels A-Z (admin)"),
         types.BotCommand("links", "List all channels & their join links (admin)"),
         types.BotCommand("ch_links", "List raw invite links for all channels (admin)"),
         types.BotCommand("reqlink", "Get a fresh join-request link (admin)"),
         types.BotCommand("genlink", "Generate a permanent post link (admin)"),
         types.BotCommand("bulklink", "Generate several links for one post (admin)"),
         types.BotCommand("delpostlink", "Delete a post link by code (admin)"),
-        types.BotCommand("setindex", "Register a channel as a category's index (admin)"),
-        types.BotCommand("indexadd", "Add a title to the alphabetical index (admin)"),
-        types.BotCommand("indexremove", "Remove a title from the index (admin)"),
         types.BotCommand("addadmin", "Grant admin access (admin)"),
         types.BotCommand("deladmin", "Revoke admin access (admin)"),
         types.BotCommand("reqtime", "Set join-request link lifetime (admin)"),
