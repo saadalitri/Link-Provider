@@ -86,16 +86,14 @@ MONGO_DB_NAME = "Alizenx"
 
 WELCOME_MEDIA_URL = "https://graph.org/file/5f305da3db21356acaaed-add2d3d5831a7b6767.mp4"   # photo (jpg/png) or video (mp4) URL
 WELCOME_MEDIA_TYPE = "video"                              # "photo" or "video" — must match WELCOME_MEDIA_URL above
-WELCOME_TEXT = """
-**ʜɪ ᴛʜᴇʀᴇ......! ›› ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴏᴜʀ ʟɪɴᴋ ꜱʜᴀʀɪɴɢ ʙᴏᴛ ‹‹**
-
-**ʜᴇʀᴇ ʏᴏᴜ ᴄᴀɴ ǫᴜɪᴄᴋʟʏ ᴀᴄᴄᴇss ᴀɴᴅ ꜱʜᴀʀᴇ ᴛᴇʟᴇɢʀᴀᴍ ʟɪɴᴋꜱ.
-ᴏᴜʀ ʙᴏᴛ ɪꜱ ᴅᴇꜱɪɢɴᴇᴅ ᴛᴏ ᴍᴀᴋᴇ ʟɪɴᴋ ꜱʜᴀʀɪɴɢ ꜱɪᴍᴘʟᴇ, ꜰᴀꜱᴛ ᴀɴᴅ ᴄᴏɴᴠᴇɴɪᴇɴᴛ.**
-
-━━━━━━━━━━━━━━━━━━
-
-**‣ ᴍᴀɪɴᴛᴀɪɴᴇᴅ ʙʏ :** [ʀᴀʀᴇ ᴀɴɪᴍᴇ ʜᴜʙ](https://t.me/Rare_Anime_Hub)
-"""
+WELCOME_TEXT = (
+    "HI THERE......!\n\n"
+    "»» <b>WELCOME TO OUR LINK SHARING BOT</b> ««\n\n"
+    "<blockquote>Here you can access rare Telegram links\n"
+    "I am your link sharing guide,\n"
+    "here to provide exclusive Telegram channel links instantly.</blockquote>\n\n"
+    "<blockquote>‣ Maintained by : <b>Eric Realm</b></blockquote>"
+)
 ABOUT_TEXT = "ℹ️ <b>About this bot</b>\n\nInstant access to exclusive Telegram channel links.\n\nMaintained by: <b>Eric Realm</b>"
 
 DEFAULT_LINK_EXPIRY_SECONDS = 5 * 60     # default join-request link lifetime, overridable via /reqtime
@@ -258,7 +256,7 @@ def delete_after(chat_id, message_id, delay_seconds):
 
 
 # ---------- Keyboards ----------
-def request_join_keyboard(invite_link: str, label="📢 Request to Join Channel"):
+def request_join_keyboard(invite_link: str, label="• REQUEST TO JOIN •"):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton(label, url=invite_link))
     return kb
@@ -340,7 +338,7 @@ def route_callback(call: types.CallbackQuery):
 # =========================================================================
 # /start
 # =========================================================================
-def send_join_request_prompt(chat_id: int, user_id: int, first_name: str, post_code: str, channel_id: int, has_post: bool, message_id: int = None):
+def send_join_request_prompt(chat_id: int, user_id: int, first_name: str, post_code: str, channel_id: int, message_id: int = None):
     """Creates a fresh 5-min join-request invite and shows the 'Request to
     Join' button. Edits message_id in place when given (used by the 'Get
     Link' regenerate button), otherwise sends a new message."""
@@ -363,23 +361,20 @@ def send_join_request_prompt(chat_id: int, user_id: int, first_name: str, post_c
         "user_id": user_id, "created_at": time.time(),
     })
 
-    wait_line = "⚠️ You need to join the channel to access this post.\n" if has_post else "⚠️ You need to join the channel first.\n"
-    approved_line = "and you'll receive the post link right after." if has_post else "and you'll be all set."
-    minutes = link_expiry_seconds() // 60
     greeting = f"Hey {html_lib.escape(first_name)},\n\n" if first_name else ""
     text = (
-        greeting + wait_line +
-        f"⏳ The link below is valid for {minutes} minute(s) only.\n\n"
-        f"Once your request is sent, it will be approved automatically {approved_line}"
+        greeting +
+        "<blockquote>Here is your link! Click below to proceed</blockquote>\n\n"
+        "<u><b>Note: If the link is expired, please click the post link again to get a new one.</b></u>"
     )
     kb = request_join_keyboard(invite.invite_link)
     if message_id:
         try:
-            bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=kb)
+            bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, parse_mode="HTML", reply_markup=kb)
             return
         except Exception:
             pass
-    bot.send_message(chat_id, text, reply_markup=kb)
+    bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(commands=["start"])
@@ -397,7 +392,7 @@ def handle_start(message: types.Message):
         welcome_kb.add(types.InlineKeyboardButton("• CLOSE •", callback_data="idxclose:x"))
         try:
             send_media = bot.send_video if WELCOME_MEDIA_TYPE == "video" else bot.send_photo
-            send_media(message.chat.id, WELCOME_MEDIA_URL, caption=WELCOME_TEXT, reply_markup=welcome_kb)
+            send_media(message.chat.id, WELCOME_MEDIA_URL, caption=WELCOME_TEXT, parse_mode="HTML", reply_markup=welcome_kb)
         except Exception as e:
             print(f"Welcome media failed: {e}")
             alert_admins(f"⚠️ Welcome {WELCOME_MEDIA_TYPE} failed to send — falling back to text.\nURL: {WELCOME_MEDIA_URL}\nError: {html_lib.escape(str(e))}")
@@ -414,8 +409,7 @@ def handle_start(message: types.Message):
         return
 
     channel_id = post["channel_id"]
-    has_post = bool(post.get("message_id"))
-    send_join_request_prompt(message.chat.id, user_id, message.from_user.first_name, post_code, channel_id, has_post)
+    send_join_request_prompt(message.chat.id, user_id, message.from_user.first_name, post_code, channel_id)
 
 
 @on_callback("getlink")
@@ -428,7 +422,7 @@ def cb_getlink(call, payload):
     bot.answer_callback_query(call.id)
     send_join_request_prompt(
         call.message.chat.id, call.from_user.id, call.from_user.first_name,
-        post_code, post["channel_id"], bool(post.get("message_id")), message_id=call.message.message_id,
+        post_code, post["channel_id"], message_id=call.message.message_id,
     )
 
 
@@ -515,14 +509,23 @@ def index_letter_page_content(category: str, letter: str, page: int):
 
 
 def show_index_content(call, text: str, kb):
-    """Edits the triggering message in place when possible (plain-text
-    messages), falling back to a new message when it can't be edited
-    (e.g. the /start welcome message, which is a photo)."""
+    """Edits the triggering message in place — as text if it's a plain-text
+    message, as a caption if it's a photo/video (e.g. the /start welcome
+    message) — so navigation never spawns a duplicate message. Only sends a
+    new message as a last resort if neither edit is possible."""
+    chat_id, message_id = call.message.chat.id, call.message.message_id
     try:
-        bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id,
+        bot.edit_message_text(text, chat_id=chat_id, message_id=message_id,
                                parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
+        return
     except Exception:
-        bot.send_message(call.message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
+        pass
+    try:
+        bot.edit_message_caption(caption=text, chat_id=chat_id, message_id=message_id, parse_mode="HTML", reply_markup=kb)
+        return
+    except Exception as e:
+        print(f"Edit content failed ({chat_id}/{message_id}): {e}")
+    bot.send_message(chat_id, text, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
 
 
 @bot.message_handler(commands=["index"])
@@ -689,32 +692,106 @@ def handle_addD(message: types.Message):
 
 
 # =========================================================================
-# /channels, /animechannel, /dramachannel — browse registered channels A-Z
-# (same index UI as public /index, always live off channels_col)
+# /channels, /animechannel, /dramachannel — paginated button list (10/page)
+# of registered channels, click a channel -> see its details
 # =========================================================================
+def channel_page_content(category: str, page: int):
+    channels = sorted(channels_col.find(category_filter(category)), key=lambda c: c.get("title", "").lower())
+    label = {"anime": "🎌 Anime", "drama": "🎬 Drama", "all": "📋 All"}.get(category, category)
+    if not channels:
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"))
+        return f"No {label} channels registered yet.", kb
+
+    per_page = 10
+    total_pages = max(1, math.ceil(len(channels) / per_page))
+    page = max(1, min(page, total_pages))
+    page_channels = channels[(page - 1) * per_page: page * per_page]
+
+    kb = types.InlineKeyboardMarkup()
+    for c in page_channels:
+        kb.add(types.InlineKeyboardButton(c["title"], callback_data=f"chpick:{c['_id']}:{category}:{page}"))
+    nav = []
+    if page > 1:
+        nav.append(types.InlineKeyboardButton("◀ Prev", callback_data=f"chpage:{category}:{page - 1}"))
+    if page < total_pages:
+        nav.append(types.InlineKeyboardButton("Next ▶", callback_data=f"chpage:{category}:{page + 1}"))
+    if nav:
+        kb.row(*nav)
+    kb.add(types.InlineKeyboardButton("❌ Close", callback_data="idxclose:x"))
+    return f"{label} channels — page {page}/{total_pages}:", kb
+
+
+def channel_detail_content(channel_id: int, category: str, page: int):
+    channel = channels_col.find_one({"_id": channel_id})
+    posts = list(posts_col.find({"channel_id": channel_id}))
+    bot_username = bot.get_me().username
+
+    title = html_lib.escape(channel["title"] if channel else str(channel_id))
+    original_link = channel_display_link(channel_id)
+    bot_req_link = f"https://t.me/{bot_username}?start={channel['join_code']}" if channel and channel.get("join_code") else "—"
+    approve_state = "ON ✅" if (channel or {}).get("approve", True) else "OFF 🚫"
+
+    real_posts = [p for p in posts if p.get("message_id")]
+    lines = [
+        f"<b>{title}</b>",
+        f"📢 Join Link: {html_lib.escape(original_link)}",
+        f"🤖 Bot Req link: {html_lib.escape(bot_req_link)}",
+        f"⚙️ Auto-approve: {approve_state}",
+        "",
+    ]
+    if real_posts:
+        lines.append("Post links:")
+        for p in real_posts:
+            link = f"https://t.me/{bot_username}?start={p['_id']}"
+            lines.append(f"<code>{p['_id']}</code> — <a href=\"{link}\">Open</a>")
+    else:
+        lines.append("No post links yet.")
+
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"chpage:{category}:{page}"))
+    return "\n".join(lines), kb
+
+
+@on_callback("chpage")
+def cb_chpage(call, payload):
+    category, page_str = payload.split(":")
+    text, kb = channel_page_content(category, int(page_str))
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML", reply_markup=kb)
+
+
+@on_callback("chpick")
+def cb_chpick(call, payload):
+    channel_id_str, category, page_str = payload.split(":")
+    text, kb = channel_detail_content(int(channel_id_str), category, int(page_str))
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(text, chat_id=call.message.chat.id, message_id=call.message.message_id, parse_mode="HTML", disable_web_page_preview=True, reply_markup=kb)
+
+
 @bot.message_handler(commands=["channels"])
 @admin_only
 def handle_channels(message: types.Message):
-    text, kb = index_menu_content("all")
+    text, kb = channel_page_content("all", 1)
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(commands=["animechannel"])
 @admin_only
 def handle_channelA(message: types.Message):
-    text, kb = index_menu_content("anime")
+    text, kb = channel_page_content("anime", 1)
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 @bot.message_handler(commands=["dramachannel"])
 @admin_only
 def handle_channelD(message: types.Message):
-    text, kb = index_menu_content("drama")
+    text, kb = channel_page_content("drama", 1)
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
 def send_channel_picker_view(message):
-    text, kb = index_menu_content("all")
+    text, kb = channel_page_content("all", 1)
     bot.send_message(message.chat.id, text, parse_mode="HTML", reply_markup=kb)
 
 
@@ -1388,11 +1465,17 @@ def handle_join_request(request: types.ChatJoinRequest):
     post = posts_col.find_one({"_id": entry["post_code"]})
     post_link = channel_post_link(channel_id, post["message_id"]) if post and post.get("message_id") else None
     channel_title = (channel or {}).get("title", "the channel")
-    caption = f"Hey {html_lib.escape(request.from_user.first_name or '')},\n\nYour request to join <b>{html_lib.escape(channel_title)}</b> has been approved."
+    caption = f"Hey {html_lib.escape(request.from_user.first_name or '')},\n\n<blockquote>Your request to join <b>{html_lib.escape(channel_title)}</b> has been approved.</blockquote>"
+    kb = approved_keyboard(used_link, channel_title, post_link)
     try:
-        bot.send_message(request.from_user.id, caption, parse_mode="HTML", reply_markup=approved_keyboard(used_link, channel_title, post_link))
+        send_media = bot.send_video if WELCOME_MEDIA_TYPE == "video" else bot.send_photo
+        send_media(request.from_user.id, WELCOME_MEDIA_URL, caption=caption, parse_mode="HTML", reply_markup=kb)
     except Exception as e:
-        print(f"DM failed (user may have blocked the bot): {e}")
+        print(f"Approval media failed, falling back to text: {e}")
+        try:
+            bot.send_message(request.from_user.id, caption, parse_mode="HTML", reply_markup=kb)
+        except Exception as e2:
+            print(f"DM failed (user may have blocked the bot): {e2}")
 
     requests_col.delete_one({"_id": used_link})
 
